@@ -3,12 +3,15 @@ OPTION DEFAULT NONE
 OPTION BASE 0
 OPTION CONSOLE SCREEN
 
-CONST VERSION$ = "0.1"
+CONST VERSION$ = "0.2"
 
 CONST NUM_BYTES_PER_ROW% = 16
 
-'Can't go much higher than this with current implementation or we'll get an out of memory error.
-CONST BUF_SIZE% = 80000*NUM_BYTES_PER_ROW%
+'Buffer size is split into an X and a Y component because memory for the buffer will be allocated
+'Using Framebuffer
+CONST BUF_SIZE_X% = 1600
+CONST BUF_SIZE_Y% = 1000
+CONST BUF_SIZE% = BUF_SIZE_X%*BUF_SIZE_Y%
 
 CONST NUM_ROWS% = 45
 CONST MAX_TOP_LEFT_FILE_OFFSET% = (INT(BUF_SIZE%/NUM_BYTES_PER_ROW%)-NUM_ROWS%+1)*NUM_BYTES_PER_ROW%
@@ -17,20 +20,19 @@ CONST START_COL% = 13
 CONST START_COL_ASC% = (START_COL% + NUM_BYTES_PER_ROW%*3 + 1)
 CONST NUM_ADDR_DIGITS% = 8
 CONST CURSOR_BLINK_PERIOD% = 500
+CONST NON_PRINTABLE_CHAR_INDICATOR$ = "?" 'For non-printable characters this character is shown instead.
 
 DIM filename$ = ""
 DIM fileSize% = 0
 DIM fileIsModified% = 0
 DIM exitRequested% = 0
 
-'Keep the file in memory as an array of single characters (bytes)
-DIM fileBuf$(BUF_SIZE%) LENGTH 1
-
 'Offset in file corresponding to element on top left of the screen.
 DIM topLeftFileOffset% = 0
 
-'Maintain a parallel array indicating if given postion has been modified
-DIM modified$(BUF_SIZE%) LENGTH 1
+'Maintain a parallel bit array indicating if given position has been modified
+'This array is to be considered private, only to be accessed via the setModified/isModified accessors.
+DIM modified%(BUF_SIZE%/64)
 
 'These variables are inputs to positionCursorInTable/ASCblock.
   DIM crsrRow% = 0, crsrCol% = 0, crsrCharOffset% = 0
@@ -52,6 +54,8 @@ FONT 1, 1
 
 COLOUR RGB(WHITE), RGB(BLUE)
 CLS
+
+FRAMEBUFFER CREATE BUF_SIZE_X%, BUF_SIZE_Y%
 
 printHeader
 LINE 0, (NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-6, MM.HRES-1, (NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-6,, RGB(WHITE)
@@ -76,14 +80,45 @@ DO WHILE exitRequested% = 0
     blinkCursorFlag% = 0
   ENDIF
 
-  checkKeyPress
+  checkKey
   printFooter 'Reprint footer because it contains status info such as file is (un)modified.
 LOOP
 
 CLS RGB(BLACK)
 
 EndOfProg:
+
+FRAMEBUFFER CLOSE
 END
+
+SUB writeByteBuf(offset%, val$)
+  STATIC bufStart% = MM.INFO(FRAMEBUFFER)
+  POKE BYTE bufStart%+offset%, ASC(val$)
+END SUB
+
+FUNCTION readByteBuf$(offset%)
+  STATIC bufStart% = MM.INFO(FRAMEBUFFER)
+  readByteBuf$ = CHR$(PEEK (BYTE bufStart% + offset%))
+END FUNCTION
+
+'Mark file position specified by offset as modified (isMod=1) or not modified (isMod=0)
+SUB setModified(offset%, isMod%)
+  LOCAL idx% = offset%/64
+  LOCAL bitpos% = 1<<(offset% MOD 64)
+
+  IF isMod% THEN
+    modified%(idx%) = modified%(idx%) OR bitpos%
+  ELSE
+    modified%(idx%) = modified%(idx%) AND (-1 XOR bitpos%)
+  ENDIF  
+END SUB
+
+'Returns true if file position specified by offset is marked as modified.
+FUNCTION isModified%(offset%)
+  LOCAL idx% = offset%/64
+  LOCAL bitpos% = 1<<(offset% MOD 64)
+  isModified% = (modified%(idx%) AND bitpos%) <> 0
+END FUNCTION
 
 'Returns true if the cursor is in the table, not the ASCII block
 FUNCTION cursorIsInTable%()
@@ -95,10 +130,10 @@ SUB saveFile
   OPEN filename$ FOR RANDOM AS #1 'Random access because we only save what's been modified.
 
   DO WHILE loc% < fileSize%
-    IF modified$(loc%) <> "" THEN
+    IF isModified%(loc%) THEN
       SEEK #1, loc%+1 'loc starts at 0, file offset starts at 1.
-      PRINT #1, fileBuf$(loc%);
-      modified$(loc%) = ""
+      PRINT #1, readByteBuf$(loc%);
+      setModified loc%, 0
     ENDIF
 
     loc% = loc% + 1
@@ -111,15 +146,18 @@ END SUB
 SUB loadFile
   LOCAL loc% = 0
 
+  promptMsg "Loading...", 1
   OPEN filename$ FOR INPUT AS #1
 
   DO WHILE loc% < fileSize%
-    fileBuf$(loc%) = INPUT$(1, #1)
-    modified$(loc%) = ""
+    writeByteBuf loc%, INPUT$(1, #1)
+    setModified loc%, 0
     loc% = loc% + 1
   LOOP
 
   CLOSE #1
+
+  promptMsg "", 0
 END SUB
 
 'Only exit this function if we have established a valid non-empty filename.
@@ -201,8 +239,8 @@ SUB refreshRow(offset%, row%)
     x% = (START_COL% + col%*3)*MM.INFO(FONTWIDTH)
 
     IF offsetl% < fileSize% THEN
-      elem$ = HEX$(ASC(fileBuf$(offsetl%)),2)
-      IF modified$(offsetl%) <> "" THEN 'Modified content is shown inverted in the hex table.
+      elem$ = HEX$(ASC(readByteBuf$(offsetl%)),2)
+      IF isModified%(offsetl%) THEN 'Modified content is shown inverted in the hex table.
         invert% = 2
       ENDIF
     ELSE
@@ -222,9 +260,12 @@ SUB refreshRow(offset%, row%)
     x% = (START_COL_ASC% + col%)*MM.INFO(FONTWIDTH)
 
     IF offsetl% < fileSize% THEN
-      elem$ = fileBuf$(offsetl%)
+      elem$ = readByteBuf$(offsetl%)
+      IF NOT isPrintable%(elem$) THEN
+        elem$ = NON_PRINTABLE_CHAR_INDICATOR$
+      ENDIF
     ELSE
-      elem$ = " "
+      elem$ = "."
     ENDIF
 
     offsetl% = offsetl%+1
@@ -301,7 +342,7 @@ END FUNCTION
 
 'If on%=1, prompt text is shown. If on%=0 prompt text is removed.
 SUB promptMsg(text$, on%)
-  IF ON%=1 THEN
+  IF on%=1 THEN
     'LINE 0, (NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-6, MM.HRES-1, (NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-6,, RGB(WHITE)
     PRINT @(0,(NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-4) text$;
     emptyInputBuffer
@@ -310,6 +351,11 @@ SUB promptMsg(text$, on%)
     'LINE 0, (NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-6, MM.HRES-1, (NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-6,, RGB(BLUE)
   ENDIF
 END SUB
+
+'Return true if given character is printable
+FUNCTION isPrintable%(char$)
+  isPrintable% = (char$ >= CHR$(32))
+END FUNCTION
 
 'Returns true if the given address (file offset) is currently shown on the screen.
 FUNCTION addrIsOnScreen%(addr%)
@@ -414,21 +460,21 @@ SUB drawCharAtCursor(invert%)
   LOCAL invertl% = invert%
 
   IF crsrFileOffset% < fileSize% THEN
-    char$ = fileBuf$(crsrFileOffset%)
+    char$ = readByteBuf$(crsrFileOffset%)
     IF crsrOnLeftNibble% = 1 THEN
       char$ = HEX$(INT(ASC(char$)/16), 1)
     ELSEIF crsrOnRightNibble% = 1 THEN
       char$ = HEX$(ASC(char$) AND 15, 1)
     ENDIF
     'If the character position is modified, inverse the inverse flag.
-    IF cursorIsInTable%() AND modified$(crsrFileOffset%) <> "" THEN
+    IF cursorIsInTable%() AND isModified%(crsrFileOffset%) THEN
       invertl% = invertl% XOR 2
     ENDIF
   ELSE 'Cursor is outside of the file boundaries.  
     IF cursorIsInTable%() THEN
       char$ = "-"
     ELSE
-      char$ = " "
+      char$ = "."
     ENDIF
   ENDIF
 
@@ -720,7 +766,7 @@ SUB ctrlG
   addrInt% = EVAL("&H"+addrStr$)
   IF addrInt% <> -1 THEN
     IF addrInt% >= BUF_SIZE% THEN
-      promptMsg ("Can't jump beyond max. buffer size of &H" + HEX$(BUF_SIZE) + " bytes.", 1)
+      promptMsg "Can't jump beyond max. buffer size of &H" + HEX$(BUF_SIZE) + " bytes.", 1
       EXIT SUB
     ENDIF
     positionCursorAtAddr addrInt%
@@ -759,14 +805,19 @@ END SUB
 SUB delete
   IF crsrFileOffset% < fileSize% THEN
     LOCAL index% = crsrFileOffset%
+
+    promptMsg "Deleting...", 1
+
     DO WHILE index% < fileSize%-1
-      fileBuf$(index%) = fileBuf$(index%+1)
-      modified$(index%) = fileBuf$(index%)
+      writeByteBuf index%, readByteBuf$(index%+1)
+      setModified index%, 1
       index% = index% + 1
     LOOP
     fileSize% = fileSize% - 1
 
     refreshPage
+
+    promptMsg "", 0
   ENDIF
 END SUB
 
@@ -775,14 +826,18 @@ SUB backSpace
   IF (crsrFileOffset% > 0) AND (crsrFileOffset% <= fileSize%) THEN
     LOCAL index% = crsrFileOffset% - 1
 
+    promptMsg "Deleting...", 1
+
     DO WHILE index% < fileSize%-1
-      fileBuf$(index%) = fileBuf$(index%+1)
-      modified$(index%) = fileBuf$(index%)
+      writeByteBuf index%, readByteBuf$(index%+1)
+      setModified index%, 1
       index% = index% + 1
     LOOP
     fileSize% = fileSize% - 1
 
     refreshPage
+
+    promptMsg "", 0
   ENDIF
 
   'Unlike delete, backspace moves the cursor.
@@ -794,24 +849,28 @@ END SUB
 'Insert key handler.
 SUB insert
   IF crsrFileOffset% < fileSize% THEN
-    IF fileSize$+1 >= BUF_SIZE THEN
+    IF fileSize%+1 >= BUF_SIZE THEN
       promptMsg "Can not insert. File size limit reached.", 1
       EXIT SUB
     ENDIF
 
+    promptMsg "Inserting...", 1
+
     LOCAL index% = fileSize%
     DO WHILE index% > crsrFileOffset%
-      fileBuf$(index%) = fileBuf$(index%-1)
-      modified$(index%) = fileBuf$(index%-1)
+      writeByteBuf index%, readByteBuf$(index%-1)
+      setModified index%, 1
       index% = index% - 1
     LOOP
 
-    fileBuf$(index%) = CHR$(0)
-    modified$(index%) = CHR$(0)
+    writeByteBuf index%, CHR$(0)
+    setModified index%, 1
 
     fileSize% = fileSize% + 1
 
     refreshPage
+
+    promptMsg "", 0
   ENDIF
 END SUB
 
@@ -890,16 +949,20 @@ SUB ctrlF
     ENDIF
   
     FOR index% = fileSize% TO (startAddrInt%-1)
-      fileBuf$(index%) = CHR$(0)
-      modified$(index%) = CHR$(0)
+      writeByteBuf index%, CHR$(0)
+      setModified index%, 1
     NEXT index%
   ENDIF
 
+  promptMsg "Filling...", 1
+
   FOR index% = startAddrInt% TO endAddrInt%
-    fileBuf$(index%) = CHR$(valueInt%)
-    modified$(index%) = CHR$(valueInt%)
+    writeByteBuf index%, CHR$(valueInt%)
+    setModified index%, 1
   NEXT index%
 
+  promptMsg "", 0
+  
   'Adjust file size if we've grown the file by filling.
   IF endAddrInt% >= fileSize% THEN
     fileSize% = endAddrInt%+1
@@ -937,15 +1000,15 @@ SUB editTable(nibble%)
   
     'Pad with 0s from previous EOF position to current cursor position.
     FOR index% = fileSize% TO crsrFileOffset%
-      fileBuf$(index%) = CHR$(0)
-      modified$(index%) = CHR$(0)
+      writeByteBuf index%, CHR$(0)
+      setModified index%, 1
     NEXT index%
 
     fileSize% = crsrFileOffset%+1
   ENDIF
 
   'Make the change
-  LOCAL oldVal% = ASC(fileBuf$(crsrFileOffset%))
+  LOCAL oldVal% = ASC(readByteBuf$(crsrFileOffset%))
   LOCAL newVal%
   IF crsrOnLeftNibble% <> 0 THEN
     newVal% = nibble%*16 OR (oldVal% AND 15)
@@ -954,8 +1017,8 @@ SUB editTable(nibble%)
   ENDIF
 
   LOCAL newValChar$ = CHR$(newVal%)
-  fileBuf$(crsrFileOffset%) = newValChar$
-  modified$(crsrFileOffset%) = newValChar$ 'Indicate there's been a modification. Anything non "" will do.
+  writeByteBuf crsrFileOffset%, newValChar$
+  setModified crsrFileOffset%, 1
 
   IF triggerPageRefresh% THEN
     refreshPage
@@ -985,8 +1048,8 @@ SUB editASCblock(char$)
     ENDIF
     
     FOR index% = fileSize% TO crsrFileOffset%
-      fileBuf$(index%) = CHR$(0)
-      modified$(index%) = CHR$(0)
+      writeByteBuf index%, CHR$(0)
+      setModified index%, 1
     NEXT index%
 
     'Refresh page if there's a gap of more than one byte
@@ -997,8 +1060,8 @@ SUB editASCblock(char$)
     fileSize% = crsrFileOffset%+1
   ENDIF
 
-  fileBuf$(crsrFileOffset%) = char$
-  modified$(crsrFileOffset%) = char$
+  writeByteBuf crsrFileOffset%, char$
+  setModified crsrFileOffset%, 1
 
   IF triggerPageRefresh% THEN
     refreshPage
@@ -1011,7 +1074,7 @@ SUB editASCblock(char$)
 END SUB
 
 'Check for key presses
-SUB checkKeyPress
+SUB checkKey
   STATIC nConsecHomePresses% = 0, nConsecEndPresses% = 0
   LOCAL pressedKey$ = INKEY$
 
