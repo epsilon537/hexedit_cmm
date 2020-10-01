@@ -91,11 +91,13 @@ EndOfProg:
 FRAMEBUFFER CLOSE
 END
 
+'Write byte specified by val$ in memory buffer at given offset.
 SUB writeByteBuf(offset%, val$)
   STATIC bufStart% = MM.INFO(FRAMEBUFFER)
   POKE BYTE bufStart%+offset%, ASC(val$)
 END SUB
 
+'Read byte from memory buffer at given offset.
 FUNCTION readByteBuf$(offset%)
   STATIC bufStart% = MM.INFO(FRAMEBUFFER)
   readByteBuf$ = CHR$(PEEK (BYTE bufStart% + offset%))
@@ -198,8 +200,9 @@ SUB checkAndLoad(fileToLoad$)
     loadFile
   ENDIF
 
-  refreshPage
+  topLeftFileOffset% = 0
   crsrRow% = 0 : crsrCol% = 0 : crsrCharOffset% = 0: positionCursorInTable
+  refreshPage
 END SUB
 
 'Refresh the whole page on the screen
@@ -962,7 +965,7 @@ SUB ctrlF
   NEXT index%
 
   promptMsg "", 0
-  
+
   'Adjust file size if we've grown the file by filling.
   IF endAddrInt% >= fileSize% THEN
     fileSize% = endAddrInt%+1
