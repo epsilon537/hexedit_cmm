@@ -12,7 +12,7 @@ ChangeLog
 - Fixed program crash when insert is pressed.
 - Added Loading..., Inserting..., Deleting..., Filling... indications.
 - Fixed heap memory issues.
-- Incread File Size Limit to 1.6MB
+- Increase File Size Limit to 1.6MB
 
 0.1:
 - Initial version.
