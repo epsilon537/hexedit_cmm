@@ -3,7 +3,7 @@ OPTION DEFAULT NONE
 OPTION BASE 0
 OPTION CONSOLE SCREEN
 
-CONST VERSION$ = "0.2"
+CONST VERSION$ = "0.3"
 
 CONST NUM_BYTES_PER_ROW% = 16
 
@@ -14,13 +14,39 @@ CONST BUF_SIZE_Y% = 1000
 CONST BUF_SIZE% = BUF_SIZE_X%*BUF_SIZE_Y%
 
 CONST NUM_ROWS% = 45
-CONST MAX_TOP_LEFT_FILE_OFFSET% = (INT(BUF_SIZE%/NUM_BYTES_PER_ROW%)-NUM_ROWS%+1)*NUM_BYTES_PER_ROW%
+CONST MAX_TOP_LEFT_FILE_OFFSET% = ((BUF_SIZE%\NUM_BYTES_PER_ROW%)-NUM_ROWS%+1)*NUM_BYTES_PER_ROW%
 CONST START_ROW% = 2
 CONST START_COL% = 13
 CONST START_COL_ASC% = (START_COL% + NUM_BYTES_PER_ROW%*3 + 1)
 CONST NUM_ADDR_DIGITS% = 8
 CONST CURSOR_BLINK_PERIOD% = 500
-CONST NON_PRINTABLE_CHAR_INDICATOR$ = "?" 'For non-printable characters this character is shown instead.
+CONST NON_PRINTABLE_CHAR_INDICATOR$ = "?" 'For non-printable characters this character is shown 
+                                          'instead.
+
+'--> The table below is used to convert a byte's column value to a screen X position.
+'Bytes are clumped together or space out depending on selected word size. E.g. 12 34, or 1234, etc.
+'The rows in the table correspond to the 4 different word sizes, the columns to column values.
+CONST NUM_WORD_SIZES% = 4
+DIM COL_TO_X%(NUM_BYTES_PER_ROW%-1, NUM_WORD_SIZES% - 1)
+COL_TO_X_DATA:
+  DATA 0, 1*3, 2*3, 3*3, 4*3, 5*3, 6*3, 7*3, 8*3, 9*3, 10*3, 11*3, 12*3, 13*3, 14*3, 15*3
+  DATA 0,   2, 2*3,   8, 4*3,  14, 6*3,  20, 8*3,  26, 10*3,   32, 12*3,   38, 14*3,   44
+  DATA 0,   2,   4,   5, 4*3,  14,  16,  18, 8*3,  26,   28,   30, 12*3,   38,   40,   42
+  DATA 0,   2,   4,   6,   8,  10,  12,  14, 8*3,  26,   28,   30,   32,   34,   36,   38
+
+SUB initColToX 'This is a workaround for 2D array pre-initialization.
+  LOCAL ii%,jj%
+
+  RESTORE COL_TO_X_DATA
+  FOR jj%=0 TO NUM_WORD_SIZES%-1
+    FOR ii%=0 TO NUM_BYTES_PER_ROW%-1
+      READ COL_TO_X%(ii%, jj%) 
+    NEXT ii%
+  NEXT jj%
+END SUB
+
+initColToX
+'<--
 
 DIM filename$ = ""
 DIM fileSize% = 0
@@ -31,34 +57,46 @@ DIM exitRequested% = 0
 DIM topLeftFileOffset% = 0
 
 'Maintain a parallel bit array indicating if given position has been modified
-'This array is to be considered private, only to be accessed via the setModified/isModified accessors.
+'This array is to be considered private, only to be accessed via the setModified/isModified 
+'accessors.
 DIM modified%(BUF_SIZE%/64)
 
-'These variables are inputs to positionCursorInTable/ASCblock.
-  DIM crsrRow% = 0, crsrCol% = 0, crsrCharOffset% = 0
+'--> These variables are inputs to positionCursorInTable/ASCblock.
+DIM crsrRow% = 0, crsrCol% = 0, crsrNibbleOffset% = 0
 '<--
 
-'The following variables can only be modified by positionCursorInTable/ASCblock:
-  DIM crsrScrnXpos% = 0, crsrScrnYpos% = 0
-  'File offset corresponding to element at cursor
-  DIM crsrFileOffset%
-  'These are booleans. If the cursor is in the ASCII block, both are 0.
-  DIM crsrOnLeftNibble%, crsrOnRightNibble%
+'--> The following variables can only be modified by positionCursorInTable/ASCblock:
+DIM crsrScrnXpos% = 0, crsrScrnYpos% = 0
+DIM crsrFileOffset% 'File offset corresponding to element at cursor
+'These are booleans. If the cursor is in the ASCII block, both are 0.
+DIM crsrOnLeftNibble%, crsrOnRightNibble%
 '<--
 
 'A semaphore from pageRefresh to positionCursorInTable/ASCblock.
 DIM pageRefreshed%=0
 
+'Word size (in bytes) in hex table: 1, 2, 4 or 8
+'Note that this editor fundamentally remains a byte level editor. Word size just affect how the
+'data is formatted in the hex table.
+'Also note that because this is an editor for CMM2, little endianness is assumed.
+DIM wordSize% = 1
+DIM log2WordSize% = 0 '0-3 corrspondening to word sizes 1, 2, 4 and 8. 
+
 MODE 1, 8
 FONT 1, 1
 
+PAGE WRITE 1
+COLOUR RGB(WHITE), RGB(BLUE)
+CLS
+PAGE WRITE 0
 COLOUR RGB(WHITE), RGB(BLUE)
 CLS
 
+'Using a framebuffer for storage
 FRAMEBUFFER CREATE BUF_SIZE_X%, BUF_SIZE_Y%
 
 printHeader
-LINE 0, (NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-6, MM.HRES-1, (NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-6,, RGB(WHITE)
+LINE 0,(NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-6,MM.HRES-1,(NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-6,,RGB(WHITE)
 promptMsg "Starting...", 1
 printFooter
 
@@ -73,7 +111,7 @@ ENDIF
 DIM blinkCursorFlag% = 0
 settick CURSOR_BLINK_PERIOD%, blinkCursorInt, 1
 
-'The main loop:
+'--> The main loop:
 DO WHILE exitRequested% = 0
   IF blinkCursorFlag% THEN
     blinkCursor
@@ -83,6 +121,7 @@ DO WHILE exitRequested% = 0
   checkKey
   printFooter 'Reprint footer because it contains status info such as file is (un)modified.
 LOOP
+'<--
 
 CLS RGB(BLACK)
 
@@ -91,6 +130,7 @@ EndOfProg:
 FRAMEBUFFER CLOSE
 END
 
+'--> Memory buffer accessor functions:
 'Write byte specified by val$ in memory buffer at given offset.
 SUB writeByteBuf(offset%, val$)
   STATIC bufStart% = MM.INFO(FRAMEBUFFER)
@@ -102,11 +142,13 @@ FUNCTION readByteBuf$(offset%)
   STATIC bufStart% = MM.INFO(FRAMEBUFFER)
   readByteBuf$ = CHR$(PEEK (BYTE bufStart% + offset%))
 END FUNCTION
+'<--
 
+'--> modified bit array accessor functions:
 'Mark file position specified by offset as modified (isMod=1) or not modified (isMod=0)
 SUB setModified(offset%, isMod%)
-  LOCAL idx% = offset%/64
-  LOCAL bitpos% = 1<<(offset% MOD 64)
+  LOCAL idx% = offset%>>6
+  LOCAL bitpos% = 1<<(offset% AND 63)
 
   IF isMod% THEN
     modified%(idx%) = modified%(idx%) OR bitpos%
@@ -117,10 +159,11 @@ END SUB
 
 'Returns true if file position specified by offset is marked as modified.
 FUNCTION isModified%(offset%)
-  LOCAL idx% = offset%/64
-  LOCAL bitpos% = 1<<(offset% MOD 64)
+  LOCAL idx% = offset%>>6
+  LOCAL bitpos% = 1<<(offset% AND 63)
   isModified% = (modified%(idx%) AND bitpos%) <> 0
 END FUNCTION
+'<--
 
 'Returns true if the cursor is in the table, not the ASCII block
 FUNCTION cursorIsInTable%()
@@ -201,8 +244,99 @@ SUB checkAndLoad(fileToLoad$)
   ENDIF
 
   topLeftFileOffset% = 0
-  crsrRow% = 0 : crsrCol% = 0 : crsrCharOffset% = 0: positionCursorInTable
   refreshPage
+  crsrRow% = 0 : crsrCol% = 0 : crsrNibbleOffset% = 0: positionCursorInTable
+END SUB
+
+'Not to be confused with refresRow below. This function is used by exportTxt and prints one line 
+'to file #1.
+SUB printRow(offset%)
+  LOCAL offsetl% = offset%
+  LOCAL col%, x%, prevX% = START_COL%
+  LOCAL elem$
+  LOCAL byteOffset%, wordOffset%
+
+  'File offset in Hex
+  PRINT #1, "&H" HEX$(offsetl%,NUM_ADDR_DIGITS%) ":  ";
+
+  'The Hex byte section.
+  FOR col% = 0 TO (NUM_BYTES_PER_ROW%-1)
+    x% = (START_COL% + COL_TO_X%(col%, log2WordSize%))
+
+    'Offset monotonically increments across the row. This means that for word sizes other than 1,
+    'offset no longer directly corresponds to a file offset. Endianness needs to be taken into 
+    'account. E.g. for word size 4, the file offsets across the row go like this:
+    '03020100 07060504 ...
+    'The following two statements make the conversion:
+    'Offset of the word we're on.
+    wordOffset% = (offsetl%>>log2WordSize%)<<log2WordSize% 
+    'From there we find the offset of the byte we're on.
+    byteOffset% = wordSize% - 1 - offsetl% + 2*wordOffset% 
+
+    IF byteOffset% < fileSize% THEN
+      elem$ = HEX$(ASC(readByteBuf$(byteOffset%)),2)
+    ELSE
+      elem$ = "--"
+    ENDIF
+
+    offsetl% = offsetl% + 1
+
+    PRINT #1, SPACE$(x%-prevX%-2) elem$;
+    prevX% = x%
+  NEXT col%
+
+  offsetl% = offset%
+  col%=0
+
+  PRINT #1, SPACE$(START_COL_ASC%-prevX%-2);
+
+  'The ASCII block section.
+  FOR col% = 0 TO (NUM_BYTES_PER_ROW%-1)
+    IF offsetl% < fileSize% THEN
+      elem$ = readByteBuf$(offsetl%)
+      IF NOT isPrintable%(elem$) THEN
+        elem$ = NON_PRINTABLE_CHAR_INDICATOR$
+      ENDIF
+    ELSE
+      elem$ = "."
+    ENDIF
+
+    offsetl% = offsetl%+1
+
+    PRINT #1, elem$;
+  NEXT col%
+
+  PRINT #1, "" 'newline
+END SUB
+
+'Export from startAddr to endAddr as text to exportFilename.
+'We actually start from the row holding startAddr so we maintain
+'the same row/address alignment as shown in the editor.
+SUB exportTxt(startAddr%, endAddr%, exportFilename$)
+  LOCAL loc%
+  LOCAL addr% = rowStartAddr%(startAddr%)
+
+  OPEN exportFilename$ FOR OUTPUT AS #1
+
+  DO WHILE addr% <= endAddr%
+    printRow addr%
+    addr% = addr% + NUM_BYTES_PER_ROW%
+  LOOP
+
+  CLOSE #1
+END SUB
+
+'Export from startAddr to endAddr as binary to exportFilename.
+SUB exportBin(startAddr%, endAddr%, exportFilename$)
+  LOCAL loc%
+
+  OPEN exportFilename$ FOR OUTPUT AS #1
+
+  FOR loc%=startAddr% TO endAddr%
+    PRINT #1, readByteBuf$(loc%);
+  NEXT loc%
+
+  CLOSE #1
 END SUB
 
 'Refresh the whole page on the screen
@@ -211,11 +345,10 @@ SUB refreshPage
   LOCAL offset% = topLeftFileOffset%
 
   FOR row%=0 TO NUM_ROWS%-1
-    refreshRow offset%, row%
+    refreshRow offset%, row%, 1
   NEXT row%
 
-  'Refresh page is relatively slow. Empty keyboard input buffer to prevent lagging behind.
-  emptyInputBuffer
+  BLIT 0, START_ROW%*MM.INFO(FONTHEIGHT), 0, START_ROW%*MM.INFO(FONTHEIGHT), MM.HRES, NUM_ROWS%*MM.INFO(FONTHEIGHT), 1
 
   'This is a semaphore to signal to positionCursorInTable/ASCblock that the page has been refreshed.
   pageRefreshed% = 1
@@ -223,15 +356,18 @@ END SUB
 
 'Refreshes given row number on the screen with the contents at file offset.
 'End offset is passed back up to the caller.
-SUB refreshRow(offset%, row%)
+SUB refreshRow(offset%, row%, skipBlit%)
   LOCAL offsetl% = offset%
   LOCAL row_l% = row% + START_ROW%
   LOCAL col%, x%, y%
   LOCAL elem$
   LOCAL invert%
+  LOCAL byteOffset%, wordOffset%
 
   y% = row_l%*MM.INFO(FONTHEIGHT)
   x% = 0
+
+  PAGE WRITE 1
 
   'File offset in Hex
   PRINT @(x%,y%,0) "&H" HEX$(offsetl%,NUM_ADDR_DIGITS%) ":";
@@ -239,11 +375,21 @@ SUB refreshRow(offset%, row%)
   'The Hex byte section.
   FOR col% = 0 TO (NUM_BYTES_PER_ROW%-1)
     invert% = 0
-    x% = (START_COL% + col%*3)*MM.INFO(FONTWIDTH)
+    x% = (START_COL% + COL_TO_X%(col%, log2WordSize%))*MM.INFO(FONTWIDTH)
 
-    IF offsetl% < fileSize% THEN
-      elem$ = HEX$(ASC(readByteBuf$(offsetl%)),2)
-      IF isModified%(offsetl%) THEN 'Modified content is shown inverted in the hex table.
+    'Offset monotonically increments across the row. This means that for word sizes other than 1,
+    'offset no longer directly corresponds to a file offset. Endianness needs to be taken into 
+    'account. E.g. for word size 4, the file offsets across the row go like this:
+    '03020100 07060504 ...
+    'The following two statements make the conversion:
+    'Offset of the word we're on
+    wordOffset% = (offsetl%>>log2WordSize%)<<log2WordSize%
+    'From there find the offset of the byte we're on. 
+    byteOffset% = wordSize% - 1 - offsetl% + 2*wordOffset% 
+
+    IF byteOffset% < fileSize% THEN
+      elem$ = HEX$(ASC(readByteBuf$(byteOffset%)),2)
+      IF isModified%(byteOffset%) THEN 'Modified content is shown inverted in the hex table.
         invert% = 2
       ENDIF
     ELSE
@@ -252,7 +398,7 @@ SUB refreshRow(offset%, row%)
 
     offsetl% = offsetl%+1
 
-    PRINT @(x%,y%,invert%) elem$;
+    PRINT @(x%,y%,invert%) elem$;: PRINT "        ";
   NEXT col%
 
   offsetl% = offset%
@@ -275,6 +421,11 @@ SUB refreshRow(offset%, row%)
 
     PRINT @(x%,y%,0) elem$;
   NEXT col%
+
+  PAGE WRITE 0
+  IF NOT skipBlit% THEN
+    BLIT 0, y%, 0, y%, MM.HRES, MM.INFO(FONTHEIGHT), 1
+  ENDIF
 
   'Return end offset to caller
   offset% = offsetl%
@@ -302,22 +453,25 @@ SUB printFooter
     filenamel$ = filename$
   ENDIF
 
-  LOCAL footer$ = "File: " + filenamel$ + modifiedIndicator$ + "F1 = Help"
+  LOCAL footer$ = "File: " + filenamel$ + modifiedIndicator$ + " Size: " + STR$(fileSize%) + " bytes   Mode: " + STR$(wordSize%*8) +"-bit"
   
   'Print inverted.
-  PRINT @(0,(NUM_ROWS%+4)*MM.INFO(FONTHEIGHT),2) footer$ + SPACE$(MM.HRES/MM.INFO(FONTWIDTH) - LEN(footer$));
+  PRINT @(0,(NUM_ROWS%+4)*MM.INFO(FONTHEIGHT),2) footer$ + SPACE$(MM.HRES/MM.INFO(FONTWIDTH) - LEN(footer$) - 11) + "F1 = Help  ";
 END SUB
 
-'Prints the given text on the prompt line, then waits for input. The input string is returned to the caller.
+'Prints the given text on the prompt line, then waits for input. 
+'The input string is returned to the caller.
 FUNCTION promptForText$(text$)
   LOCAL inputStr$
   PRINT @(0,(NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-4) text$;
   INPUT "", inputStr$
+  emptyInputBuffer
   PRINT @(0,(NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-4) SPACE$(MM.HRES/MM.INFO(FONTWIDTH));
   promptForText$ = inputStr$  
 END FUNCTION
 
-'Prints the given text on the prompt line, then waits for the user to press any key. The pressed key is returned to the caller.
+'Prints the given text on the prompt line, then waits for the user to press any key. 
+'The pressed key is returned to the caller.
 FUNCTION promptForAnyKey$(text$)
   LOCAL pressedKey$
   LOCAL latchedTime% = INT(TIMER)
@@ -365,6 +519,29 @@ FUNCTION addrIsOnScreen%(addr%)
   addrIsOnScreen% = (addr% >= topLeftFileOffset%) AND (addr% <= topLeftFileOffset% + NUM_BYTES_PER_ROW%*NUM_ROWS% - 1)
 END FUNCTION
 
+'Return the address/file of the 1st byte in the row containing given address.
+FUNCTION rowStartAddr%(addr%)
+  rowStartAddr% = (addr%\NUM_BYTES_PER_ROW%)*NUM_BYTES_PER_ROW%
+END FUNCTION
+
+'Convert hex table column position to file offset (rel. to start of column) taking word size into 
+'account.
+FUNCTION tblColToFileOffset%(col%)
+  tblColToFileOffset% = (col%\wordSize% + 1)*wordSize% - 1 - (col% MOD wordSize%)
+END FUNCTION
+
+'Convert file offset to hex table column position taking word size into account
+FUNCTION fileOffsetToTblCol%(fOffset%)
+  LOCAL byteOffsetInRow% = fOffset% - rowStartAddr%(fOffset%)
+  LOCAL wordOffsetInRow% = (byteOffsetInRow%\wordSize%)*wordSize%
+  fileOffsetToTblCol% = 2*wordOffsetInRow% + wordSize% - 1 - byteOffsetInRow%
+END FUNCTION
+
+'Convert file offset to ASCII block column
+FUNCTION fileOffsetToASCcol%(offset%)
+  fileOffsetToASCcol% = (offset% - topLeftFileOffset%) MOD NUM_BYTES_PER_ROW%
+END FUNCTION
+
 'Position the cursor at the given address (file offset). Scroll if necessary.
 SUB positionCursorAtAddr(addr%)
   LOCAL addrl% = addr%
@@ -375,27 +552,30 @@ SUB positionCursorAtAddr(addr%)
 
   IF addrIsOnScreen%(addrl%) = 0 THEN
     IF addrl% > topLeftFileOffset% THEN 'Move forward to middle of screen.
-      topLeftFileOffset% = (INT(addrl%/NUM_BYTES_PER_ROW%) - INT(NUM_ROWS%/2))*NUM_BYTES_PER_ROW% 
+      topLeftFileOffset% = (addrl%\NUM_BYTES_PER_ROW% - NUM_ROWS%\2)*NUM_BYTES_PER_ROW% 
     ELSE 'Move backward to top of screen.
-      topLeftFileOffset% = INT(addrl%/NUM_BYTES_PER_ROW%)*NUM_BYTES_PER_ROW%
+      topLeftFileOffset% = rowStartAddr%(addrl%)
     ENDIF
     refreshPage
   ENDIF
 
-  crsrRow% = INT((addrl% - topLeftFileOffset%)/NUM_BYTES_PER_ROW%)
-  crsrCol% = (addrl% - topLeftFileOffset%) MOD NUM_BYTES_PER_ROW%
-  crsrCharOffset% = 0
+  crsrRow% = (addrl% - topLeftFileOffset%)\NUM_BYTES_PER_ROW%
+  crsrNibbleOffset% = 0
 
   IF cursorIsInTable%() THEN
+    crsrCol% = fileOffsetToTblCol%(addrl%)
     positionCursorInTable
   ELSE
+    crsrCol% = fileOffsetToASCcol%(addrl%)
     positionCursorInASCblock
   ENDIF
 END SUB
 
-'Position cursor in the hex table at crsrRow/crsrCol/crsrCharOffset
-'crsrRow/Col are element positions, not screen coordinates. crsrCharOffset is 0 or 1
-'for left or right character.
+'Position cursor in the hex table at crsrRow/crsrCol/crsrNibbleOffset
+'crsrRow/Col are byte element positions, not screen coordinates. crsrNibbleOffset is 0 or 1 for 
+'left or right nibble.
+'crsrRow increments from left to right. crsCol increments from top to bottom.
+'This sub won't scroll the page. We're positioning the cursor somewhere on the current page.
 SUB positionCursorInTable
   'Un-Reverse previous char position, unless we just had a page refresh.
   IF NOT pageRefreshed% THEN
@@ -404,11 +584,14 @@ SUB positionCursorInTable
     pageRefreshed% = 0
   ENDIF
 
-  crsrScrnXpos% = (START_COL% + crsrCol%*3) + crsrCharOffset%
+  'Start column + word offset including spacing between words + byte offset in word + nibble offset 
+  'in bytes.
+  crsrScrnXpos% = START_COL% + COL_TO_X%(crsrCol%, log2WordSize%) + crsrNibbleOffset%
+  'crsrScrnXpos% = START_COL% + (crsrCol%\wordSize%)*(wordSize%*3) + (crsrCol% MOD wordSize%)*2 + crsrNibbleOffset%
   crsrScrnYpos% = crsrRow% + START_ROW%
-  crsrOnLeftNibble% = (crsrCharOffset%=0)
-  crsrOnRightNibble% = (crsrCharOffset%=1)
-  crsrFileOffset% = topLeftFileOffset% + crsrRow%*NUM_BYTES_PER_ROW% + crsrCol%
+  crsrOnLeftNibble% = (crsrNibbleOffset%=0)
+  crsrOnRightNibble% = (crsrNibbleOffset%=1)
+  crsrFileOffset% = topLeftFileOffset% + crsrRow%*NUM_BYTES_PER_ROW% + tblColToFileOffset%(crsrCol%)
 
   'Don't exceed buffer size
   IF crsrFileOffset% >= BUF_SIZE% THEN
@@ -418,7 +601,7 @@ SUB positionCursorInTable
   drawCharAtCursor 2 '2 indicates print reversed.
 END SUB
 
-'Position cursor in the ASCII block at crsrRow/crsrCol
+'Position cursor in the ASCII block at crsrRow/crsrCol.
 'crsrRow/Col are element positions, not screen coordinates.
 SUB positionCursorInASCblock
   'Un-Reverse previous char position, unless we just had a page refresh.
@@ -449,7 +632,8 @@ END SUB
 
 SUB blinkCursor
   STATIC invert%=2
-  'A cursor is emulated by alternating between regular and reverse print of the character at the cursor position.
+  'A cursor is emulated by alternating between regular and reverse print of the character at the 
+  'cursor position.
   drawCharAtCursor invert% 
   invert% = invert% XOR 2
 END SUB
@@ -465,7 +649,7 @@ SUB drawCharAtCursor(invert%)
   IF crsrFileOffset% < fileSize% THEN
     char$ = readByteBuf$(crsrFileOffset%)
     IF crsrOnLeftNibble% = 1 THEN
-      char$ = HEX$(INT(ASC(char$)/16), 1)
+      char$ = HEX$(ASC(char$)\16, 1)
     ELSEIF crsrOnRightNibble% = 1 THEN
       char$ = HEX$(ASC(char$) AND 15, 1)
     ENDIF
@@ -487,7 +671,7 @@ END SUB
 'Help popup is prepared on a separate page in a Box, then shown on page 0 using a sprite.
 SUB showHelpPopup
   LOCAL longestStringLen% = LEN("Home 1x = Go To Top of Page")
-  LOCAL numLines% = 17
+  LOCAL numLines% = 19
   LOCAL boxWidth% = (longestStringLen%+4)*MM.INFO(FONTWIDTH)
   LOCAL boxHeight% = (numLines%+4)*MM.INFO(FONTHEIGHT)
 
@@ -508,11 +692,15 @@ SUB showHelpPopup
   y% = y% + MM.INFO(FONTHEIGHT)
   PRINT @(x%,y%,2) "Ctrl-S = Save";
   y% = y% + MM.INFO(FONTHEIGHT)
+  PRINT @(x%,y%,2) "Ctrl-E = Export";
+  y% = y% + MM.INFO(FONTHEIGHT)
   PRINT @(x%,y%,2) "Ctrl-F = Fill";
   y% = y% + MM.INFO(FONTHEIGHT)
   PRINT @(x%,y%,2) "Ctrl-G = Goto";
   y% = y% + MM.INFO(FONTHEIGHT)
   PRINT @(x%,y%,2) "Ctrl-P = Screenshot";
+  y% = y% + MM.INFO(FONTHEIGHT)
+  PRINT @(x%,y%,2) "Ctrl-T = Toggle Word Size";
   y% = y% + MM.INFO(FONTHEIGHT)
   PRINT @(x%,y%,2) "INS = Insert one byte";
   y% = y% + MM.INFO(FONTHEIGHT)
@@ -605,12 +793,12 @@ SUB cursorLeft
   LOCAL posInTableNotASC%
 
   IF cursorIsInTable%() <> 0 THEN
-    IF crsrCharOffset%=1 THEN 'We're on a right nibble in the hex table. Move to the left nibble.
-      crsrCharOffset% = 0
+    IF crsrNibbleOffset%=1 THEN 'We're on a right nibble in the hex table. Move to the left nibble.
+      crsrNibbleOffset% = 0
       posInTableNotAsc% = 1
     ELSE
       IF crsrCol% > 0 THEN 'We're on the left nibble in the hex table, not in the leftmost column.
-        crsrCharOffset% = 1 'We move to the right nibble of the previous byte.
+        crsrNibbleOffset% = 1 'We move to the right nibble of the previous byte.
         crsrCol% = crsrCol% - 1
         posInTableNotAsc% = 1
       ELSE
@@ -620,7 +808,7 @@ SUB cursorLeft
           posInTableNotASC% = 0
         ELSE 'crsrRow = 0
           IF topLeftFileOffset% > 0 THEN 'Leftmost column, top row, not the beginning of the file.
-            scrollLineDown               'scroll one line, then move to last column in the ASCII block.
+            scrollLineDown          'scroll one line, then move to last column in the ASCII block.
             crsrCol% = NUM_BYTES_PER_ROW% - 1
             posInTableNotASC% = 0
           ELSE
@@ -636,7 +824,7 @@ SUB cursorLeft
     ELSE
       posInTableNotASC% = 1 'We're in the ASCII block, first colument. 
       crsrCol% = NUM_BYTES_PER_ROW% - 1 'Jump to last column of hex table on same row
-      crsrCharOffset% = 1               'Rightmost nibble.
+      crsrNibbleOffset% = 1               'Rightmost nibble.
     ENDIF
   ENDIF
 
@@ -648,18 +836,18 @@ SUB cursorLeft
 END SUB
 
 'stayInBlock indicates whether cursor at the end of the block (table or ASC block)
-'should advance to the other block (stayInBlock=0) or go to the next line in the current block (stayInBlock=1)
-'Again, many cases, by similar logic as in cursorLeft above.
+'should advance to the other block (stayInBlock=0) or go to the next line in the current block 
+'(stayInBlock=1). Again, many cases, by similar logic as in cursorLeft above.
 SUB cursorRight(stayInBlock%)
   LOCAL posInTableNotASC%
 
   IF cursorIsInTable%() THEN
-    IF crsrCharOffset%=0 THEN 'Cursor is on the left digit
-      crsrCharOffset% = 1
+    IF crsrNibbleOffset%=0 THEN 'Cursor is on the left digit
+      crsrNibbleOffset% = 1
       posInTableNotASC% = 1
     ELSE
-      IF crsrCol% < NUM_BYTES_PER_ROW% - 1 THEN 'Cursor is on the right digit but not at the end of the line
-        crsrCharOffset% = 0
+      IF crsrCol% < NUM_BYTES_PER_ROW% - 1 THEN 'Cursor is on the right digit but not at end of line
+        crsrNibbleOffset% = 0
         crsrCol% = crsrCol% + 1
         posInTableNotASC% = 1
       ELSE IF stayInBlock% = 0 THEN 'At the end of the line, move to the ASCII block
@@ -669,11 +857,11 @@ SUB cursorRight(stayInBlock%)
         IF crsrRow% < NUM_ROWS% - 1 THEN 'If not at the end of the page, just go down one row
           crsrRow% = crsrRow% + 1
           crsrCol% = 0
-          crsrCharOffset% = 0
+          crsrNibbleOffset% = 0
           posInTableNotASC% = 1
         ELSE 'If at the end of the page scroll up one line
           crsrCol% = 0
-          crsrCharOffset% = 0
+          crsrNibbleOffset% = 0
           posInTableNotASC% = 1
           scrollLineUp
         ENDIF
@@ -687,11 +875,11 @@ SUB cursorRight(stayInBlock%)
       IF crsrRow% < NUM_ROWS% - 1 THEN 'Not last row:
         crsrRow% = crsrRow% + 1
         crsrCol% = 0
-        crsrCharOffset% = 0
+        crsrNibbleOffset% = 0
       ELSE 'Last row:
         scrollLineUp
         crsrCol% = 0
-        crsrCharOffset% = 0
+        crsrNibbleOffset% = 0
       ENDIF
 
       posInTableNotASC% = NOT stayInBlock% 
@@ -798,6 +986,69 @@ SUB ctrlS
   promptMsg "File saved.", 1
 END SUB
 
+'ctrlT (toggle word size) key handler
+SUB ctrlT
+  'Increment with wraparound
+  log2wordSize% = (log2wordSize% + 1) AND 3
+  wordSize% = 1<<log2wordSize%  'Sync wordSize to log2WordSize
+  refreshPage
+  positionCursorAtAddr crsrFileOffset%
+END SUB
+
+'ctrlE (export) key handler
+SUB ctrlE
+  LOCAL startAddrStr$ = promptForText$("Export from Address: &H")
+  LOCAL startAddrInt% = -1
+  ON ERROR IGNORE 1
+  startAddrInt% = EVAL("&H"+startAddrStr$)
+
+  IF startAddrInt% < 0 THEN
+    promptMsg "Start address invalid.", 1
+    EXIT SUB
+  ENDIF
+
+  LOCAL endAddrStr$ = promptForText$("To Address: &H")
+  LOCAL endAddrInt% = -1
+  ON ERROR IGNORE 1
+  endAddrInt% = EVAL("&H"+endAddrStr$)
+
+  IF endAddrInt% < startAddrInt% THEN
+    promptMsg "End address invalid.", 1
+    EXIT SUB
+  ELSE IF endAddrInt% >= fileSize% THEN
+    promptMsg "End address is past file size., 1
+    EXIT SUB
+  ENDIF
+
+  LOCAL binOrTxt$ = ""
+  DO WHILE binOrTxt$<>"B" AND binOrTxt$<>"T" 
+    binOrTxt$=UCASE$(promptForAnyKey$("Binary or Text? (B/T)")) 
+  LOOP
+
+  LOCAL exportFilename$ = promptForText$("Export to file: ")
+  IF exportFilename$ = "" THEN
+    promptMsg "Export aborted.", 1
+    EXIT SUB
+  ENDIF
+
+  IF MM.INFO(FILESIZE exportFilename$) <> -1 THEN 
+    IF UCASE$(promptForAnyKey$("File exists. Overwrite? (Y/N)")) <> "Y" THEN
+      promptMsg "Export aborted.", 1
+      EXIT SUB
+    ENDIF
+  ENDIF
+
+  promptMsg "Exporting...", 1
+
+  IF binOrTxt$ = "B" THEN
+    exportBin startAddrInt%, endAddrInt%, exportFilename$
+  ELSE
+    exportTxt startAddrInt%, endAddrInt%, exportFilename$
+  ENDIF
+
+  promptMsg "Done.       ", 1
+END SUB
+
 'Empty the keyboard input buffer
 SUB emptyInputBuffer
   DO WHILE INKEY$ <> ""
@@ -877,7 +1128,7 @@ SUB insert
   ENDIF
 END SUB
 
-SUB mysterySub
+SUB paasei
   PAGE COPY 0 TO 4
   PAGE WRITE 3  
   CLS RGB(BLACK)
@@ -909,27 +1160,20 @@ END SUB
 
 'ctrlF (Fill) key handler.
 SUB ctrlF
-  LOCAL startAddrStr$ = promptForText$("From Address: &H")
+  LOCAL startAddrStr$ = promptForText$("Fill from Address: &H")
   LOCAL startAddrInt% = -1
   ON ERROR IGNORE 1
   startAddrInt% = EVAL("&H"+startAddrStr$)
-
-  LOCAL endAddrStr$ = promptForText$("To Address: &H")
-  LOCAL endAddrInt% = -1
-  ON ERROR IGNORE 1
-  endAddrInt% = EVAL("&H"+endAddrStr$)
-
-  LOCAL valueStr$ = promptForText$("Byte: &H")
-  LOCAL valueInt% = -1 
-  ON ERROR IGNORE 1
-  valueInt% = EVAL("&H"+valueStr$)
-
-  LOCAL index%
 
   IF startAddrInt% < 0 THEN
     promptMsg "Start address invalid.", 1
     EXIT SUB
   ENDIF
+
+  LOCAL endAddrStr$ = promptForText$("To Address: &H")
+  LOCAL endAddrInt% = -1
+  ON ERROR IGNORE 1
+  endAddrInt% = EVAL("&H"+endAddrStr$)
 
   IF endAddrInt% < startAddrInt% THEN
     promptMsg "End address invalid.", 1
@@ -938,13 +1182,21 @@ SUB ctrlF
     promptMsg("End address is past file size limit of &H" + HEX$(endAddrInt%) + " bytes.", 1)
     EXIT SUB
   ENDIF
+
+  LOCAL valueStr$ = promptForText$("Byte: &H")
+  LOCAL valueInt% = -1 
+  ON ERROR IGNORE 1
+  valueInt% = EVAL("&H"+valueStr$)
   
   IF (valueInt% < 0) OR (valueInt% > 255) THEN
     promptMsg "Fill value invalid.", 1
     EXIT SUB
   ENDIF
 
-  'The strange case where the user requests to fill a block that's entirely located outside of the current file boundaries.
+  LOCAL index%
+
+  'The strange case where the user requests to fill a block that's entirely located outside of the 
+  'current file boundaries.
   IF startAddrInt% > fileSize% THEN
     'If there's a gap of more than one byte, ask to pad to cursor
     IF UCASE$(promptForAnyKey$("You are editing past the current end of the file. Pad with 0's to fill position? (Y/N)")) <> "Y" THEN
@@ -964,12 +1216,13 @@ SUB ctrlF
     setModified index%, 1
   NEXT index%
 
-  promptMsg "", 0
+  promptMsg "Done.     ", 1
 
   'Adjust file size if we've grown the file by filling.
   IF endAddrInt% >= fileSize% THEN
     fileSize% = endAddrInt%+1
-  
+  ENDIF
+
   fileIsModified% = 1
   positionCursorAtAddr startAddrInt% 'Move the cursor to the 1st byte of the fill block.
   refreshPage
@@ -988,7 +1241,8 @@ SUB editTable(nibble%)
   LOCAL triggerPageRefresh% = 0
   LOCAL index%
 
-  'Note that there are no check against BUF_SIZE here. The idea is that the cursor can never get past the BUF_SIZE offset.
+  'Note that there are no check against BUF_SIZE here. The idea is that the cursor can never get 
+  'past the BUF_SIZE offset.
 
   'Allow to make modifications past the end of the file...
   IF crsrFileOffset% >= fileSize% THEN
@@ -1026,7 +1280,7 @@ SUB editTable(nibble%)
   IF triggerPageRefresh% THEN
     refreshPage
   ELSE
-    refreshRow INT(crsrFileOffset%/NUM_BYTES_PER_ROW%)*NUM_BYTES_PER_ROW%, crsrRow%
+    refreshRow rowStartAddr%(crsrFileOffset%), crsrRow%, 0
   ENDIF
 
   fileIsModified% = 1
@@ -1069,7 +1323,7 @@ SUB editASCblock(char$)
   IF triggerPageRefresh% THEN
     refreshPage
   ELSE
-    refreshRow INT(crsrFileOffset%/NUM_BYTES_PER_ROW%)*NUM_BYTES_PER_ROW%, crsrRow%
+    refreshRow rowStartAddr%(crsrFileOffset%), crsrRow%, 0
   ENDIF
 
   fileIsModified% = 1
@@ -1123,8 +1377,10 @@ SUB checkKey
         help
       CASE 17 'CtrlQ
         ctrlQ
-      CASE 5
-        mysterySub
+      CASE 5 'ctrlE'
+        ctrlE
+      CASE 15
+        paasei
       CASE 6 'Fill
         ctrlF
       CASE 7 'CtrlG
@@ -1137,6 +1393,8 @@ SUB checkKey
         screenshot
       CASE 19 'CtrlS
         ctrlS
+      CASE 20 'CtrlT
+        ctrlT
       CASE ELSE
         'This is for the non-ctrl keys, i.e. the edits.
         IF cursorIsInTable%() <> 0 THEN

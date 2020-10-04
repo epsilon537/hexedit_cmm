@@ -1,9 +1,18 @@
 HexEdit Binary File Editor for Color Maximite 2 by Epsilon
 ----------------------------------------------------------
-Current Version: 0.2
+Current Version: 0.3
 
 ChangeLog
 ---------
+0.3:
+- Fixed cosmetic bug where first character sometimes remains inverted right after loading a file.
+- Fixed bug with goto when in ASCI column.
+- Fixed ctrlF fill.
+- New feature: Ctrl-T toggles between different word sizes: 8-bit, 16-bit, 32-bit and 64-bit.
+- New feature: Ctrl-E exports part of file as text or as binary.
+- Reduced redraw artifacts when editing.
+- Added file size to footer.
+
 0.2:
 - Documentation updates.
 - Fixed error 'Function name + variable name must be less than 33 characters'.
