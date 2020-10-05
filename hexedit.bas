@@ -3,15 +3,10 @@ OPTION DEFAULT NONE
 OPTION BASE 0
 OPTION CONSOLE SCREEN
 
-CONST VERSION$ = "0.3"
+CONST VERSION$ = "0.4"
 
 CONST NUM_BYTES_PER_ROW% = 16
-
-'Buffer size is split into an X and a Y component because memory for the buffer will be allocated
-'Using Framebuffer
-CONST BUF_SIZE_X% = 1600
-CONST BUF_SIZE_Y% = 1000
-CONST BUF_SIZE% = BUF_SIZE_X%*BUF_SIZE_Y%
+CONST BUF_SIZE% = 3*1024*1024
 
 CONST NUM_ROWS% = 45
 CONST MAX_TOP_LEFT_FILE_OFFSET% = ((BUF_SIZE%\NUM_BYTES_PER_ROW%)-NUM_ROWS%+1)*NUM_BYTES_PER_ROW%
@@ -61,6 +56,12 @@ DIM topLeftFileOffset% = 0
 'accessors.
 DIM modified%(BUF_SIZE%/64)
 
+'Memory buffer holding the file's contents.
+'This array is to be considered private, only to be accessed via the readByteBuf/writeByteBuf 
+'accessors.
+DIM byteBuf%(BUF_SIZE/8)
+DIM byteBufAddr% = PEEK(VARADDR byteBuf%())
+
 '--> These variables are inputs to positionCursorInTable/ASCblock.
 DIM crsrRow% = 0, crsrCol% = 0, crsrNibbleOffset% = 0
 '<--
@@ -91,9 +92,6 @@ CLS
 PAGE WRITE 0
 COLOUR RGB(WHITE), RGB(BLUE)
 CLS
-
-'Using a framebuffer for storage
-FRAMEBUFFER CREATE BUF_SIZE_X%, BUF_SIZE_Y%
 
 printHeader
 LINE 0,(NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-6,MM.HRES-1,(NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-6,,RGB(WHITE)
@@ -126,21 +124,18 @@ LOOP
 CLS RGB(BLACK)
 
 EndOfProg:
-
-FRAMEBUFFER CLOSE
+CLEAR
 END
 
 '--> Memory buffer accessor functions:
 'Write byte specified by val$ in memory buffer at given offset.
 SUB writeByteBuf(offset%, val$)
-  STATIC bufStart% = MM.INFO(FRAMEBUFFER)
-  POKE BYTE bufStart%+offset%, ASC(val$)
+  POKE BYTE byteBufAddr%+offset%, ASC(val$)
 END SUB
 
 'Read byte from memory buffer at given offset.
 FUNCTION readByteBuf$(offset%)
-  STATIC bufStart% = MM.INFO(FRAMEBUFFER)
-  readByteBuf$ = CHR$(PEEK (BYTE bufStart% + offset%))
+  readByteBuf$ = CHR$(PEEK (BYTE byteBufAddr% + offset%))
 END FUNCTION
 '<--
 
@@ -171,17 +166,17 @@ FUNCTION cursorIsInTable%()
 END FUNCTION
 
 SUB saveFile
-  LOCAL loc% = 0
+  LOCAL location% = 0
   OPEN filename$ FOR RANDOM AS #1 'Random access because we only save what's been modified.
 
-  DO WHILE loc% < fileSize%
-    IF isModified%(loc%) THEN
-      SEEK #1, loc%+1 'loc starts at 0, file offset starts at 1.
-      PRINT #1, readByteBuf$(loc%);
-      setModified loc%, 0
+  DO WHILE location% < fileSize%
+    IF isModified%(location%) THEN
+      SEEK #1, location%+1 'loc starts at 0, file offset starts at 1.
+      PRINT #1, readByteBuf$(location%);
+      setModified location%, 0
     ENDIF
 
-    loc% = loc% + 1
+    location% = location% + 1
   LOOP
 
   CLOSE #1
@@ -189,15 +184,15 @@ SUB saveFile
 END SUB
 
 SUB loadFile
-  LOCAL loc% = 0
+  LOCAL location% = 0
 
   promptMsg "Loading...", 1
   OPEN filename$ FOR INPUT AS #1
 
-  DO WHILE loc% < fileSize%
-    writeByteBuf loc%, INPUT$(1, #1)
-    setModified loc%, 0
-    loc% = loc% + 1
+  DO WHILE location% < fileSize%
+    writeByteBuf location%, INPUT$(1, #1)
+    setModified location%, 0
+    location% = location% + 1
   LOOP
 
   CLOSE #1
@@ -313,7 +308,7 @@ END SUB
 'We actually start from the row holding startAddr so we maintain
 'the same row/address alignment as shown in the editor.
 SUB exportTxt(startAddr%, endAddr%, exportFilename$)
-  LOCAL loc%
+  LOCAL location%
   LOCAL addr% = rowStartAddr%(startAddr%)
 
   OPEN exportFilename$ FOR OUTPUT AS #1
@@ -328,13 +323,13 @@ END SUB
 
 'Export from startAddr to endAddr as binary to exportFilename.
 SUB exportBin(startAddr%, endAddr%, exportFilename$)
-  LOCAL loc%
+  LOCAL location%
 
   OPEN exportFilename$ FOR OUTPUT AS #1
 
-  FOR loc%=startAddr% TO endAddr%
-    PRINT #1, readByteBuf$(loc%);
-  NEXT loc%
+  FOR location%=startAddr% TO endAddr%
+    PRINT #1, readByteBuf$(location%);
+  NEXT location%
 
   CLOSE #1
 END SUB
@@ -431,10 +426,22 @@ SUB refreshRow(offset%, row%, skipBlit%)
   offset% = offsetl%
 END SUB
 
+'SUB printHeader
+''  LOCAL header$ = "Hexedit V"+VERSION$+" by Epsilon.";
+''  'Print inverted
+''  PRINT @(0,0,2) header$ + SPACE$(MM.HRES/MM.INFO(FONTWIDTH) - LEN(header$))
+'END SUB
+
 SUB printHeader
-  LOCAL header$ = "Hexedit V"+VERSION$+" by Epsilon.";
-  'Print inverted
-  PRINT @(0,0,2) header$ + SPACE$(MM.HRES/MM.INFO(FONTWIDTH) - LEN(header$))
+ LOCAL header$ = "Hexedit V"+VERSION$+" by Epsilon.";
+ LOCAL byteNr$ = "             00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F  0123456789ABCDEF"
+
+ 'Print inverted
+ PRINT @(0,0,2) header$ + SPACE$(MM.HRES/MM.INFO(FONTWIDTH) - LEN(header$))
+ 'Print CYAN)
+ color rgb(CYAN)
+ PRINT @(0,MM.INFO(FONTHEIGHT),2) byteNr$ + SPACE$(MM.HRES/MM.INFO(FONTWIDTH) - LEN(byteNr$))
+ color rgb(WHITE)
 END SUB
 
 SUB printFooter
@@ -456,7 +463,7 @@ SUB printFooter
   LOCAL footer$ = "File: " + filenamel$ + modifiedIndicator$ + " Size: " + STR$(fileSize%) + " bytes   Mode: " + STR$(wordSize%*8) +"-bit"
   
   'Print inverted.
-  PRINT @(0,(NUM_ROWS%+4)*MM.INFO(FONTHEIGHT),2) footer$ + SPACE$(MM.HRES/MM.INFO(FONTWIDTH) - LEN(footer$) - 11) + "F1 = Help  ";
+  PRINT @(0,(NUM_ROWS%+4)*MM.INFO(FONTHEIGHT),2) footer$ + SPACE$(MM.HRES/MM.INFO(FONTWIDTH) - LEN(footer$) - 11) + "F1 = help  ";
 END SUB
 
 'Prints the given text on the prompt line, then waits for input. 
@@ -514,9 +521,10 @@ FUNCTION isPrintable%(char$)
   isPrintable% = (char$ >= CHR$(32))
 END FUNCTION
 
-'Returns true if the given address (file offset) is currently shown on the screen.
+'Returns true if the given address (file offset) is currently shown on the screen. Pretend that the last row
+'is not shown on the screen. We don't like cursors on that row.
 FUNCTION addrIsOnScreen%(addr%)
-  addrIsOnScreen% = (addr% >= topLeftFileOffset%) AND (addr% <= topLeftFileOffset% + NUM_BYTES_PER_ROW%*NUM_ROWS% - 1)
+  addrIsOnScreen% = (addr% >= topLeftFileOffset%) AND (addr% <= topLeftFileOffset% + NUM_BYTES_PER_ROW%*(NUM_ROWS%-1) - 1)
 END FUNCTION
 
 'Return the address/file of the 1st byte in the row containing given address.
@@ -668,10 +676,10 @@ SUB drawCharAtCursor(invert%)
   PRINT @(crsrScrnXpos%*MM.INFO(FONTWIDTH), crsrScrnYpos%*MM.INFO(FONTHEIGHT), invertl%) char$;
 END SUB
 
-'Help popup is prepared on a separate page in a Box, then shown on page 0 using a sprite.
+'help popup is prepared on a separate page in a Box, then shown on page 0 using a sprite.
 SUB showHelpPopup
   LOCAL longestStringLen% = LEN("Home 1x = Go To Top of Page")
-  LOCAL numLines% = 19
+  LOCAL numLines% = 20
   LOCAL boxWidth% = (longestStringLen%+4)*MM.INFO(FONTWIDTH)
   LOCAL boxHeight% = (numLines%+4)*MM.INFO(FONTHEIGHT)
 
@@ -686,15 +694,17 @@ SUB showHelpPopup
                     
   PRINT @(x%,y%,2) "F1 = Help";
   y% = y% + MM.INFO(FONTHEIGHT)
+  PRINT @(x%,y%,2) "F2 = Save";
+  y% = y% + MM.INFO(FONTHEIGHT)
+  PRINT @(x%,y%,2) "F3 = Load";
+  y% = y% + MM.INFO(FONTHEIGHT)
   PRINT @(x%,y%,2) "Ctrl-Q = Quit";
-  y% = y% + MM.INFO(FONTHEIGHT)
-  PRINT @(x%,y%,2) "Ctrl-L = Load";
-  y% = y% + MM.INFO(FONTHEIGHT)
-  PRINT @(x%,y%,2) "Ctrl-S = Save";
   y% = y% + MM.INFO(FONTHEIGHT)
   PRINT @(x%,y%,2) "Ctrl-E = Export";
   y% = y% + MM.INFO(FONTHEIGHT)
   PRINT @(x%,y%,2) "Ctrl-F = Fill";
+  y% = y% + MM.INFO(FONTHEIGHT)
+  PRINT @(x%,y%,2) "Ctrl-S = Search";
   y% = y% + MM.INFO(FONTHEIGHT)
   PRINT @(x%,y%,2) "Ctrl-G = Goto";
   y% = y% + MM.INFO(FONTHEIGHT)
@@ -915,7 +925,7 @@ END SUB
 
 'The argument indicates how many consecutive times the home key was pressed.
 '1x: Put cursor at top of page. 2x: Put cursor at file offset 0.
-SUB home(numConsecPresses%)
+SUB homeKeyHandler(numConsecPresses%)
   LOCAL addr%
   IF (numConsecPresses% >= 2) THEN
     addr% = 0
@@ -928,7 +938,7 @@ END SUB
 
 'The argument indicates how many consecutive times the end key was pressed.
 '1x: Put cursor at end of page. 2x: Put cursor at EOF.
-SUB endKey(numConsecPresses%)
+SUB endKeyHandler(numConsecPresses%)
   LOCAL addr%
   IF (numConsecPresses% >= 2) THEN
     addr% = fileSize% - 1
@@ -940,7 +950,7 @@ SUB endKey(numConsecPresses%)
 END SUB
 
 'Ctrl-Q (Quit) key handler.
-SUB ctrlQ
+SUB quitKeyHandler
   IF fileIsModified% THEN
     LOCAL yesNo$ = promptForAnyKey$("You have unsaved changes. Are you sure you want to quit? (Y/N)")
     exitRequested% = (UCASE$(yesNo$)="Y")
@@ -950,11 +960,11 @@ SUB ctrlQ
 END SUB
 
 'Ctrl-G (Go To addr) key handler.
-SUB ctrlG
+SUB gotoKeyHandler
   LOCAL addrStr$ = promptForText$("Go To Address: &H")
   LOCAL addrInt% = -1
   ON ERROR IGNORE 1
-  addrInt% = EVAL("&H"+addrStr$)
+    addrInt% = EVAL("&H"+addrStr$)
   IF addrInt% <> -1 THEN
     IF addrInt% >= BUF_SIZE% THEN
       promptMsg "Can't jump beyond max. buffer size of &H" + HEX$(BUF_SIZE) + " bytes.", 1
@@ -964,7 +974,7 @@ SUB ctrlG
   ENDIF
 END SUB
 
-SUB ctrlL
+SUB loadKeyHandler
   IF fileIsModified% THEN
     IF UCASE$(promptForAnyKey$("You have unsaved changes. Discard changes and open a new file? (Y/N)")) <> "Y" THEN
       EXIT SUB
@@ -978,16 +988,14 @@ SUB ctrlL
   checkAndLoad promptForText$("Load File: ")
 END SUB
 
-'ctrlS (save) key handler
-SUB ctrlS
+SUB saveKeyHandler
   promptMsg "Saving...", 1
   saveFile
   refreshPage 'To remove all the location-is-modified indications.
   promptMsg "File saved.", 1
 END SUB
 
-'ctrlT (toggle word size) key handler
-SUB ctrlT
+SUB toggleKeyHandler
   'Increment with wraparound
   log2wordSize% = (log2wordSize% + 1) AND 3
   wordSize% = 1<<log2wordSize%  'Sync wordSize to log2WordSize
@@ -995,12 +1003,11 @@ SUB ctrlT
   positionCursorAtAddr crsrFileOffset%
 END SUB
 
-'ctrlE (export) key handler
-SUB ctrlE
+SUB exportKeyHandler
   LOCAL startAddrStr$ = promptForText$("Export from Address: &H")
   LOCAL startAddrInt% = -1
   ON ERROR IGNORE 1
-  startAddrInt% = EVAL("&H"+startAddrStr$)
+    startAddrInt% = EVAL("&H"+startAddrStr$)
 
   IF startAddrInt% < 0 THEN
     promptMsg "Start address invalid.", 1
@@ -1010,7 +1017,7 @@ SUB ctrlE
   LOCAL endAddrStr$ = promptForText$("To Address: &H")
   LOCAL endAddrInt% = -1
   ON ERROR IGNORE 1
-  endAddrInt% = EVAL("&H"+endAddrStr$)
+    endAddrInt% = EVAL("&H"+endAddrStr$)
 
   IF endAddrInt% < startAddrInt% THEN
     promptMsg "End address invalid.", 1
@@ -1055,8 +1062,7 @@ SUB emptyInputBuffer
   LOOP
 END SUB
 
-'Delete key handler.
-SUB delete
+SUB deleteKeyHandler
   IF crsrFileOffset% < fileSize% THEN
     LOCAL index% = crsrFileOffset%
 
@@ -1100,8 +1106,7 @@ SUB backSpace
   ENDIF
 END SUB
 
-'Insert key handler.
-SUB insert
+SUB insertKeyHandler
   IF crsrFileOffset% < fileSize% THEN
     IF fileSize%+1 >= BUF_SIZE THEN
       promptMsg "Can not insert. File size limit reached.", 1
@@ -1151,19 +1156,116 @@ SUB paasei
   PAGE WRITE 0
 END SUB
 
-'F1 (Help) key handler
-SUB help
+SUB helpKeyHandler
   showHelpPopup
   LOCAL dummy$ = promptForAnyKey$("")
   removeHelpPopup
 END SUB
 
-'ctrlF (Fill) key handler.
-SUB ctrlF
+SUB findKeyHandler  
+  STATIC seq$(15) LENGTH 1
+  STATIC modifiedsaved%(15)
+
+  LOCAL inputStr$, fld$, anyKey$
+
+  LOCAL ii%, matchCount%, seqLen%=0, direction% = 1
+  LOCAL searchOffset% = crsrFileOffset%
+
+  inputStr$ = promptForText$("find hex byte seq. (max. 16): ")
+
+  FOR ii%=0 TO 15
+    fld$ = FIELD$(inputStr$, ii%+1, " ,") 'Space and ',' are valid separators.
+    IF fld$ <> "" THEN
+      seq$(ii%) = ""
+      ON ERROR SKIP 1
+        seq$(ii%) = CHR$(EVAL("&H"+fld$))
+      IF seq$(ii%) = "" THEN
+        promptMsg "Invalid byte sequence. Aborting.", 1
+        EXIT SUB
+      ENDIF
+
+      seqLen% = ii%+1
+    endif
+  NEXT ii%
+
+  LOCAL done% = 0
+
+  promptMsg "Searching...", 1
+
+  DO WHILE NOT done%
+    IF searchOffset% < 0 THEN
+      IF UCASE$(promptForAnyKey$("Beginning of file reached. Wraparound? (Y/N)")) = "Y" THEN
+        searchOffset% = fileSize%-seqLen%
+        promptMsg "Searching...", 1
+      ELSE
+        done% = 1
+        CONTINUE DO
+      ENDIF
+    ELSE IF searchOffset% + seqLen% >= fileSize% THEN
+      IF UCASE$(promptForAnyKey$("End of file reached. Wraparound? (Y/N)")) = "Y" THEN
+        searchOffset% = 0
+        promptMsg "Searching...", 1
+      ELSE
+        done% = 1
+        CONTINUE DO
+      ENDIF
+    ENDIF
+
+    'The actual match loop. We have a match if we have seqLen consecutive byte matches.
+    matchCount%=0
+    FOR ii% = 0 TO seqLen%-1
+      IF readByteBuf$(searchOffset% + ii%) = seq$(ii%) THEN
+        matchCount% = matchCount%+1
+      ELSE
+        matchCount% = 0
+      ENDIF
+    NEXT ii%
+
+    IF matchCount% = seqLen% THEN 'We have a match.
+      positionCursorAtAddr(searchOffset%)
+      
+      'Ugly hack alert: temporarily abuse the modified array to highlight the found sequence
+      FOR ii% = 0 TO seqLen%-1
+        modifiedsaved%(ii%) = isModified%(crsrFileOffset%+ii%)
+        setModified crsrFileOffset%+ii%, NOT modifiedsaved%(ii%)
+      NEXT ii%
+      'Sequence may be split across two rows.
+      refreshRow rowStartAddr%(crsrFileOffset%), crsrRow%, 0
+      refreshRow rowStartAddr%(crsrFileOffset%) + NUM_BYTES_PER_ROW%, crsrRow%+1, 0
+      
+      anyKey$ = UCASE$(promptForAnyKey$("n=next, p=previous, enter=done."))
+      IF anyKey$ = "N" THEN
+        direction% = 1
+        searchOffset% = searchOffset%+direction%
+        promptMsg "Searching...", 1
+      ELSE IF anyKey$ = "P" THEN
+        direction% = -1
+        searchOffset% = searchOffset%+direction%
+        promptMsg "Searching...", 1
+      ELSE
+        done% = 1
+      ENDIF
+
+      'Restore highlight
+      FOR ii% = 0 TO seqLen%-1
+        setModified crsrFileOffset%+ii%, modifiedsaved%(ii%)
+      NEXT ii%
+      refreshRow rowStartAddr%(crsrFileOffset%), crsrRow%, 0
+      refreshRow rowStartAddr%(crsrFileOffset%) + NUM_BYTES_PER_ROW%, crsrRow%+1, 0
+
+    ELSE 'No match. Move on one byte in selected direction.
+      searchOffset% = searchOffset%+direction%
+    ENDIF 
+  LOOP
+
+  promptMsg "", 0
+END SUB
+
+SUB fillKeyHandler
   LOCAL startAddrStr$ = promptForText$("Fill from Address: &H")
   LOCAL startAddrInt% = -1
   ON ERROR IGNORE 1
-  startAddrInt% = EVAL("&H"+startAddrStr$)
+    startAddrInt% = EVAL("&H"+startAddrStr$)
 
   IF startAddrInt% < 0 THEN
     promptMsg "Start address invalid.", 1
@@ -1173,7 +1275,7 @@ SUB ctrlF
   LOCAL endAddrStr$ = promptForText$("To Address: &H")
   LOCAL endAddrInt% = -1
   ON ERROR IGNORE 1
-  endAddrInt% = EVAL("&H"+endAddrStr$)
+    endAddrInt% = EVAL("&H"+endAddrStr$)
 
   IF endAddrInt% < startAddrInt% THEN
     promptMsg "End address invalid.", 1
@@ -1186,7 +1288,7 @@ SUB ctrlF
   LOCAL valueStr$ = promptForText$("Byte: &H")
   LOCAL valueInt% = -1 
   ON ERROR IGNORE 1
-  valueInt% = EVAL("&H"+valueStr$)
+    valueInt% = EVAL("&H"+valueStr$)
   
   IF (valueInt% < 0) OR (valueInt% > 255) THEN
     promptMsg "Fill value invalid.", 1
@@ -1332,7 +1434,7 @@ END SUB
 
 'Check for key presses
 SUB checkKey
-  STATIC nConsecHomePresses% = 0, nConsecEndPresses% = 0
+  STATIC nConsechomePresses% = 0, nConsecEndPresses% = 0
   LOCAL pressedKey$ = INKEY$
 
   IF pressedKey$ <> "" THEN
@@ -1340,9 +1442,9 @@ SUB checkKey
     promptMsg "", 0
 
     IF pressedKey$ = CHR$(134) THEN
-      nConsecHomePresses% = nConsecHomePresses% + 1
+      nConsechomePresses% = nConsechomePresses% + 1
     ELSE
-      nConsecHomePresses% = 0
+      nConsechomePresses% = 0
     ENDIF
 
     IF pressedKey$ = CHR$(135) THEN
@@ -1353,7 +1455,7 @@ SUB checkKey
 
     SELECT CASE ASC(pressedKey$)
       CASE 127 'Del
-        delete
+        deleteKeyHandler
       CASE 128 'Up Arrow
         cursorUp
       CASE 129 'Down Arrow
@@ -1363,38 +1465,40 @@ SUB checkKey
       CASE 131 'Right Arrow
         '0 indicates don't stay in block
         cursorRight 0
-      CASE 132 'Insert
-        insert
-      CASE 134 'Home
-        home nConsecHomePresses%
+      CASE 132 'insert
+        insertKeyHandler
+      CASE 134 'home
+        homeKeyHandler nConsechomePresses%
       CASE 135 'End
-        endKey nConsecEndPresses% 
+        endKeyHandler nConsecEndPresses% 
       CASE 136 'Page Up
         pageUp
       CASE 137 'Page Down
         pageDown
-      CASE 145 'Help
-        help
-      CASE 17 'CtrlQ
-        ctrlQ
-      CASE 5 'ctrlE'
-        ctrlE
+      CASE 145 'F1
+        helpKeyHandler
+      CASE 146 'F2
+        saveKeyHandler
+      case 147 'F3
+        loadKeyHandler
+      CASE 17 'ctrlQ
+        quitKeyHandler
+      CASE 5 'ctrlE
+        exportKeyHandler
       CASE 15
         paasei
-      CASE 6 'Fill
-        ctrlF
-      CASE 7 'CtrlG
-        ctrlG
+      CASE 6 'ctrlF
+        fillKeyHandler
+      CASE 7 'ctrlG
+        gotoKeyHandler
       CASE 8 'BackSpace
-         backSpace
-      CASE 12 'CtrlL
-        ctrlL
+        backSpace
       CASE 16 'CtrlP
         screenshot
       CASE 19 'CtrlS
-        ctrlS
+        findKeyHandler
       CASE 20 'CtrlT
-        ctrlT
+        toggleKeyHandler
       CASE ELSE
         'This is for the non-ctrl keys, i.e. the edits.
         IF cursorIsInTable%() <> 0 THEN

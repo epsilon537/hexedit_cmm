@@ -1,9 +1,15 @@
 HexEdit Binary File Editor for Color Maximite 2 by Epsilon
 ----------------------------------------------------------
-Current Version: 0.3
+Current Version: 0.4
 
 ChangeLog
 ---------
+0.4:
+- New feature: F3 find byte sequence.
+- Added column header, contributed by Michael "twofingers".
+- Modified some key bindings (Sorry!)
+- Increased file size limit to 3MB.
+
 0.3:
 - Fixed cosmetic bug where first character sometimes remains inverted right after loading a file.
 - Fixed bug with goto when in ASCI column.
