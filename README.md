@@ -46,7 +46,6 @@ Press F1 to get help on key bindings.
 
 Current limitations
 -------------------
-File Size Limit: 1.6MB
-Byte mode only. No support (yet?) for 16-bit and 32-bit modes.
+File Size Limit: 3MB
 Console only.
 
