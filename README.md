@@ -5,9 +5,9 @@ Current Version: 0.4
 ChangeLog
 ---------
 0.4:
-- New feature: F3 find byte sequence.
+- New feature: Ctrl-S find byte sequence.
 - Added column header, contributed by Michael "twofingers".
-- Modified some key bindings (Sorry!)
+- Modified some key bindings (Sorry!). Load and Save moved to F3 and F2. Ctrl-S is now bound to the search function.
 - Increased file size limit to 3MB.
 
 0.3:
