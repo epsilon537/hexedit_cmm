@@ -3,7 +3,7 @@ OPTION DEFAULT NONE
 OPTION BASE 0
 OPTION CONSOLE SCREEN
 
-CONST VERSION$ = "0.4"
+CONST VERSION$ = "0.5"
 
 CONST NUM_BYTES_PER_ROW% = 16
 CONST BUF_SIZE% = 3*1024*1024
@@ -427,7 +427,7 @@ SUB refreshRow(offset%, row%, skipBlit%)
 END SUB
 
 'SUB printHeader
-''  LOCAL header$ = "Hexedit V"+VERSION$+" by Epsilon.";
+''  LOCAL header$ = "HexEdit V"+VERSION$+" by Epsilon.";
 ''  'Print inverted
 ''  PRINT @(0,0,2) header$ + SPACE$(MM.HRES/MM.INFO(FONTWIDTH) - LEN(header$))
 'END SUB
@@ -463,7 +463,7 @@ SUB printFooter
   LOCAL footer$ = "File: " + filenamel$ + modifiedIndicator$ + " Size: " + STR$(fileSize%) + " bytes   Mode: " + STR$(wordSize%*8) +"-bit"
   
   'Print inverted.
-  PRINT @(0,(NUM_ROWS%+4)*MM.INFO(FONTHEIGHT),2) footer$ + SPACE$(MM.HRES/MM.INFO(FONTWIDTH) - LEN(footer$) - 11) + "F1 = help  ";
+  PRINT @(0,(NUM_ROWS%+4)*MM.INFO(FONTHEIGHT),2) footer$ + SPACE$(MM.HRES/MM.INFO(FONTWIDTH) - LEN(footer$) - 11) + "F1 = Help  ";
 END SUB
 
 'Prints the given text on the prompt line, then waits for input. 
@@ -521,13 +521,13 @@ FUNCTION isPrintable%(char$)
   isPrintable% = (char$ >= CHR$(32))
 END FUNCTION
 
-'Returns true if the given address (file offset) is currently shown on the screen. Pretend that the last row
-'is not shown on the screen. We don't like cursors on that row.
-FUNCTION addrIsOnScreen%(addr%)
-  addrIsOnScreen% = (addr% >= topLeftFileOffset%) AND (addr% <= topLeftFileOffset% + NUM_BYTES_PER_ROW%*(NUM_ROWS%-1) - 1)
+'Returns true if the given address (file offset) is currently shown on the screen. 
+'If includeLastRow% = 0, pretend that the last row is not shown on the screen.
+FUNCTION addrIsOnScreen%(addr%, includeLastRow%)
+  addrIsOnScreen% = (addr% >= topLeftFileOffset%) AND (addr% <= topLeftFileOffset% + NUM_BYTES_PER_ROW%*(NUM_ROWS%-1+includeLastRow%) - 1)
 END FUNCTION
 
-'Return the address/file of the 1st byte in the row containing given address.
+'Return the address/offset of the 1st byte in the row containing given address.
 FUNCTION rowStartAddr%(addr%)
   rowStartAddr% = (addr%\NUM_BYTES_PER_ROW%)*NUM_BYTES_PER_ROW%
 END FUNCTION
@@ -551,14 +551,15 @@ FUNCTION fileOffsetToASCcol%(offset%)
 END FUNCTION
 
 'Position the cursor at the given address (file offset). Scroll if necessary.
-SUB positionCursorAtAddr(addr%)
+'Set allowCursorOnLastRow%=1 if you want to allow positioning of cursor on last row rather than scrolling.
+SUB positionCursorAtAddr(addr%, allowCursorOnLastRow%)
   LOCAL addrl% = addr%
 
   IF addrl% >= BUF_SIZE% THEN
     addrl% = BUF_SIZE%-1
   ENDIF
 
-  IF addrIsOnScreen%(addrl%) = 0 THEN
+  IF addrIsOnScreen%(addrl%, allowCursorOnLastRow%) = 0 THEN
     IF addrl% > topLeftFileOffset% THEN 'Move forward to middle of screen.
       topLeftFileOffset% = (addrl%\NUM_BYTES_PER_ROW% - NUM_ROWS%\2)*NUM_BYTES_PER_ROW% 
     ELSE 'Move backward to top of screen.
@@ -603,7 +604,7 @@ SUB positionCursorInTable
 
   'Don't exceed buffer size
   IF crsrFileOffset% >= BUF_SIZE% THEN
-    positionCursorAtAddr(BUF_SIZE%-1)
+    positionCursorAtAddr(BUF_SIZE%-1), 1
   ENDIF
 
   drawCharAtCursor 2 '2 indicates print reversed.
@@ -627,7 +628,7 @@ SUB positionCursorInASCblock
 
   'Don't exceed buffer size
   IF crsrFileOffset% >= BUF_SIZE% THEN
-    positionCursorAtAddr(BUF_SIZE%-1)
+    positionCursorAtAddr(BUF_SIZE%-1), 1
   ENDIF
 
   drawCharAtCursor 2 '2 indicates print reversed.
@@ -933,7 +934,7 @@ SUB homeKeyHandler(numConsecPresses%)
     addr% = topLeftFileOffset%
   ENDIF
 
-  positionCursorAtAddr addr%
+  positionCursorAtAddr addr%, 1
 END SUB
 
 'The argument indicates how many consecutive times the end key was pressed.
@@ -946,7 +947,7 @@ SUB endKeyHandler(numConsecPresses%)
     addr% = topLeftFileOffset% + NUM_ROWS%*NUM_BYTES_PER_ROW% - 1
   ENDIF
 
-  positionCursorAtAddr addr%
+  positionCursorAtAddr addr%, 1
 END SUB
 
 'Ctrl-Q (Quit) key handler.
@@ -969,8 +970,10 @@ SUB gotoKeyHandler
     IF addrInt% >= BUF_SIZE% THEN
       promptMsg "Can't jump beyond max. buffer size of &H" + HEX$(BUF_SIZE) + " bytes.", 1
       EXIT SUB
+    ELSE
+      promptMsg "Invalid address", 1
     ENDIF
-    positionCursorAtAddr addrInt%
+    positionCursorAtAddr addrInt%, 0
   ENDIF
 END SUB
 
@@ -1000,7 +1003,7 @@ SUB toggleKeyHandler
   log2wordSize% = (log2wordSize% + 1) AND 3
   wordSize% = 1<<log2wordSize%  'Sync wordSize to log2WordSize
   refreshPage
-  positionCursorAtAddr crsrFileOffset%
+  positionCursorAtAddr crsrFileOffset%, 1
 END SUB
 
 SUB exportKeyHandler
@@ -1102,7 +1105,7 @@ SUB backSpace
 
   'Unlike delete, backspace moves the cursor.
   IF (crsrFileOffset% > 0) THEN
-    positionCursorAtAddr (crsrFileOffset% - 1)
+    positionCursorAtAddr (crsrFileOffset% - 1), 1
   ENDIF
 END SUB
 
@@ -1222,7 +1225,7 @@ SUB findKeyHandler
     NEXT ii%
 
     IF matchCount% = seqLen% THEN 'We have a match.
-      positionCursorAtAddr(searchOffset%)
+      positionCursorAtAddr(searchOffset%), 0
       
       'Ugly hack alert: temporarily abuse the modified array to highlight the found sequence
       FOR ii% = 0 TO seqLen%-1
@@ -1326,7 +1329,7 @@ SUB fillKeyHandler
   ENDIF
 
   fileIsModified% = 1
-  positionCursorAtAddr startAddrInt% 'Move the cursor to the 1st byte of the fill block.
+  positionCursorAtAddr startAddrInt%, 0 'Move the cursor to the 1st byte of the fill block.
   refreshPage
 END SUB
 

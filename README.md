@@ -1,9 +1,13 @@
 HexEdit Binary File Editor for Color Maximite 2 by Epsilon
 ----------------------------------------------------------
-Current Version: 0.4
+Current Version: 0.5
 
 ChangeLog
 ---------
+0.5:
+- Fixed End Key not entirely behaving as expected.
+- Show error message when an invalid goto address is entered.
+
 0.4:
 - New feature: Ctrl-S find byte sequence.
 - Added column header, contributed by Michael "twofingers".
@@ -41,6 +45,8 @@ The file's contents are shown as hexadecimal byte values and as ASCII code in tw
 The usual file navigation with cursors keys, page up&down, home, end, etc. should work as expected.
 
 Hexedit is a full-screen console-only editor. I does not work over serial, sorry.
+
+The file to edit can be passed in as a command line argument.
 
 Press F1 to get help on key bindings.
 
