@@ -1,9 +1,12 @@
 HexEdit Binary File Editor for Color Maximite 2 by Epsilon
 ----------------------------------------------------------
-Current Version: 0.5
+Current Version: 0.6
 
 ChangeLog
 ---------
+0.6:
+- Fixed file modified indication not always reported in footer.
+
 0.5:
 - Fixed End Key not entirely behaving as expected.
 - Show error message when an invalid goto address is entered.

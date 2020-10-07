@@ -3,7 +3,7 @@ OPTION DEFAULT NONE
 OPTION BASE 0
 OPTION CONSOLE SCREEN
 
-CONST VERSION$ = "0.5"
+CONST VERSION$ = "0.6"
 
 CONST NUM_BYTES_PER_ROW% = 16
 CONST BUF_SIZE% = 3*1024*1024
@@ -147,6 +147,7 @@ SUB setModified(offset%, isMod%)
 
   IF isMod% THEN
     modified%(idx%) = modified%(idx%) OR bitpos%
+    fileIsModified% = 1 'Indicate file as modified.
   ELSE
     modified%(idx%) = modified%(idx%) AND (-1 XOR bitpos%)
   ENDIF  
@@ -426,22 +427,16 @@ SUB refreshRow(offset%, row%, skipBlit%)
   offset% = offsetl%
 END SUB
 
-'SUB printHeader
-''  LOCAL header$ = "HexEdit V"+VERSION$+" by Epsilon.";
-''  'Print inverted
-''  PRINT @(0,0,2) header$ + SPACE$(MM.HRES/MM.INFO(FONTWIDTH) - LEN(header$))
-'END SUB
-
 SUB printHeader
- LOCAL header$ = "Hexedit V"+VERSION$+" by Epsilon.";
+ LOCAL header$ = "HexEdit V"+VERSION$+" by Epsilon.";
  LOCAL byteNr$ = "             00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F  0123456789ABCDEF"
 
  'Print inverted
  PRINT @(0,0,2) header$ + SPACE$(MM.HRES/MM.INFO(FONTWIDTH) - LEN(header$))
  'Print CYAN)
- color rgb(CYAN)
+ COLOR RGB(CYAN)
  PRINT @(0,MM.INFO(FONTHEIGHT),2) byteNr$ + SPACE$(MM.HRES/MM.INFO(FONTWIDTH) - LEN(byteNr$))
- color rgb(WHITE)
+ COLOR RGB(WHITE)
 END SUB
 
 SUB printFooter
@@ -460,10 +455,11 @@ SUB printFooter
     filenamel$ = filename$
   ENDIF
 
-  LOCAL footer$ = "File: " + filenamel$ + modifiedIndicator$ + " Size: " + STR$(fileSize%) + " bytes   Mode: " + STR$(wordSize%*8) +"-bit"
-  
+  LOCAL footerLeft$ = "File: " + filenamel$ + modifiedIndicator$ + " Size: " + STR$(fileSize%) + " bytes   Mode: " + STR$(wordSize%*8) +"-bit"
+  LOCAL footerRight$ = "F1 = Help  "
+
   'Print inverted.
-  PRINT @(0,(NUM_ROWS%+4)*MM.INFO(FONTHEIGHT),2) footer$ + SPACE$(MM.HRES/MM.INFO(FONTWIDTH) - LEN(footer$) - 11) + "F1 = Help  ";
+  PRINT @(0,(NUM_ROWS%+4)*MM.INFO(FONTHEIGHT),2) footerLeft$ + SPACE$(MM.HRES/MM.INFO(FONTWIDTH) - LEN(footerLeft$) - LEN(footerRight$)) + footerRight$;
 END SUB
 
 'Prints the given text on the prompt line, then waits for input. 
@@ -507,12 +503,10 @@ END FUNCTION
 'If on%=1, prompt text is shown. If on%=0 prompt text is removed.
 SUB promptMsg(text$, on%)
   IF on%=1 THEN
-    'LINE 0, (NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-6, MM.HRES-1, (NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-6,, RGB(WHITE)
     PRINT @(0,(NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-4) text$;
     emptyInputBuffer
   ELSE
     PRINT @(0,(NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-4) SPACE$(MM.HRES/MM.INFO(FONTWIDTH));
-    'LINE 0, (NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-6, MM.HRES-1, (NUM_ROWS%+3)*MM.INFO(FONTHEIGHT)-6,, RGB(BLUE)
   ENDIF
 END SUB
 
@@ -1328,7 +1322,6 @@ SUB fillKeyHandler
     fileSize% = endAddrInt%+1
   ENDIF
 
-  fileIsModified% = 1
   positionCursorAtAddr startAddrInt%, 0 'Move the cursor to the 1st byte of the fill block.
   refreshPage
 END SUB
@@ -1388,7 +1381,6 @@ SUB editTable(nibble%)
     refreshRow rowStartAddr%(crsrFileOffset%), crsrRow%, 0
   ENDIF
 
-  fileIsModified% = 1
   cursorRight 1 '1 indicates stay in block.
 END SUB
 
@@ -1431,7 +1423,6 @@ SUB editASCblock(char$)
     refreshRow rowStartAddr%(crsrFileOffset%), crsrRow%, 0
   ENDIF
 
-  fileIsModified% = 1
   cursorRight 1 '1 indicates stay in block.
 END SUB
 
